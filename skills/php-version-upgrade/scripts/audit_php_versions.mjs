@@ -272,18 +272,29 @@ function auditWorkflows(repoPath) {
 				.filter(Boolean);
 		}
 
-		const has82 = detectedVersions.includes('8.2') || content.includes("'8.2'") || content.includes('"8.2"');
-		const has85 = detectedVersions.includes('8.5') || content.includes("'8.5'") || content.includes('"8.5"');
-		const hasLegacy = detectedVersions.some((v) => parseFloat(v) < 8.2);
+		const isMatrixWorkflow = Boolean(phpMatrixMatch);
+		const singlePhpMatch = content.match(/php-version:\s*['"]?([0-9.]+)['"]?/i);
+		const singlePhpVersion = singlePhpMatch ? singlePhpMatch[1] : null;
 
-		if (phpMatrixMatch || content.includes('setup-php') || content.includes('shivammathur/setup-php')) {
+		const has82 = detectedVersions.includes('8.2') || /['"]?8\.2['"]?/.test(content);
+		const has85 = detectedVersions.includes('8.5') || /['"]?8\.5['"]?/.test(content);
+		const hasLegacy = detectedVersions.some((v) => parseFloat(v) < 8.2) || (singlePhpVersion && parseFloat(singlePhpVersion) < 8.2);
+
+		let needsMatrixUpdate = false;
+		if (isMatrixWorkflow) {
+			needsMatrixUpdate = !has82 || !has85 || hasLegacy;
+		} else if (singlePhpVersion) {
+			needsMatrixUpdate = parseFloat(singlePhpVersion) < 8.2;
+		}
+
+		if (isMatrixWorkflow || content.includes('setup-php') || content.includes('shivammathur/setup-php')) {
 			detectedWorkflows.push({
 				file: basename(file),
 				detectedVersions,
 				has82,
 				has85,
 				hasLegacy,
-				needsMatrixUpdate: !has82 || !has85 || hasLegacy,
+				needsMatrixUpdate,
 				recommendedMatrix: TARGET_RECOMMENDED_MATRIX
 			});
 		}
