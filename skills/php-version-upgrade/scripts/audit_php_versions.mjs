@@ -11,20 +11,48 @@
  * - PHP CodeSniffer Configuration (phpcs.xml*, testVersion)
  * - Static Analysis (phpstan.neon*, psalm.xml)
  * - CI/CD Pipelines (.github/workflows/*.yml)
- * - Deprecated PHP 8.2-8.5 patterns & obsolete <8.2 version polyfills
+ * - Deprecated PHP patterns & obsolete version polyfills/shims
+ *
+ * Configurable Boundaries:
+ *   --min=<version>   Target minimum PHP version floor (default: 8.2)
+ *   --max=<version>   Target maximum PHP version ceiling (default: 8.5)
  *
  * Usage:
  *   node audit_php_versions.mjs [path]
- *   node audit_php_versions.mjs --batch [directory-containing-multiple-repos]
+ *   node audit_php_versions.mjs [path] --min=8.3 --max=8.5
+ *   node audit_php_versions.mjs --batch [directory] --min=8.2 --max=8.5
  *   node audit_php_versions.mjs [path] --json
  */
 
-import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { join, resolve, basename, extname } from 'node:path';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { join, resolve, basename } from 'node:path';
 
-const TARGET_MIN_PHP = '8.2';
-const TARGET_MAX_PHP = '8.5';
-const TARGET_RECOMMENDED_MATRIX = ['8.2', '8.3', '8.4', '8.5'];
+const DEFAULT_MIN_PHP = '8.2';
+const DEFAULT_MAX_PHP = '8.5';
+
+/**
+ * Generate an array of minor PHP versions between min and max (inclusive)
+ */
+function generateVersionMatrix(minVer, maxVer) {
+	const min = parseFloat(minVer);
+	const max = parseFloat(maxVer);
+	if (isNaN(min) || isNaN(max) || min > max) {
+		return [minVer, maxVer];
+	}
+
+	// Canonical PHP minor series
+	const knownSeries = ['7.0', '7.1', '7.2', '7.3', '7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5'];
+	const matched = knownSeries.filter((v) => {
+		const num = parseFloat(v);
+		return num >= min && num <= max;
+	});
+
+	if (matched.length > 0) {
+		return matched;
+	}
+
+	return [minVer, maxVer];
+}
 
 /**
  * Safely read a file as UTF-8 string
@@ -79,7 +107,7 @@ function findFiles(dir, pattern, maxDepth = 4, currentDepth = 0) {
 /**
  * Audit Plugin Header
  */
-function auditPluginHeader(repoPath) {
+function auditPluginHeader(repoPath, options) {
 	const phpFiles = findFiles(repoPath, /\.php$/, 1);
 	let result = {
 		found: false,
@@ -87,7 +115,7 @@ function auditPluginHeader(repoPath) {
 		pluginName: null,
 		requiresPhp: null,
 		needsUpdate: false,
-		targetRequiresPhp: TARGET_MIN_PHP
+		targetRequiresPhp: options.targetMin
 	};
 
 	for (const file of phpFiles) {
@@ -103,7 +131,7 @@ function auditPluginHeader(repoPath) {
 			const requiresMatch = content.match(/Requires PHP:\s*([0-9.]+)/i);
 			if (requiresMatch) {
 				result.requiresPhp = requiresMatch[1].trim();
-				result.needsUpdate = result.requiresPhp !== TARGET_MIN_PHP;
+				result.needsUpdate = result.requiresPhp !== options.targetMin;
 			} else {
 				result.requiresPhp = null;
 				result.needsUpdate = true;
@@ -118,7 +146,7 @@ function auditPluginHeader(repoPath) {
 /**
  * Audit readme.txt
  */
-function auditReadmeTxt(repoPath) {
+function auditReadmeTxt(repoPath, options) {
 	const readmePath = join(repoPath, 'readme.txt');
 	const content = readText(readmePath);
 	if (!content) {
@@ -132,15 +160,15 @@ function auditReadmeTxt(repoPath) {
 		found: true,
 		file: 'readme.txt',
 		requiresPhp,
-		needsUpdate: requiresPhp !== TARGET_MIN_PHP,
-		targetRequiresPhp: TARGET_MIN_PHP
+		needsUpdate: requiresPhp !== options.targetMin,
+		targetRequiresPhp: options.targetMin
 	};
 }
 
 /**
  * Audit composer.json
  */
-function auditComposer(repoPath) {
+function auditComposer(repoPath, options) {
 	const composerPath = join(repoPath, 'composer.json');
 	const data = readJson(composerPath);
 	if (!data) {
@@ -156,10 +184,11 @@ function auditComposer(repoPath) {
 	);
 
 	let needsUpdate = false;
-	let recommendedRequirePhp = `>=${TARGET_MIN_PHP}`;
+	const recommendedRequirePhp = `>=${options.targetMin}`;
 
 	if (requirePhp) {
-		if (!requirePhp.includes('8.2') && !requirePhp.includes('>=8.2') && !requirePhp.includes('^8.2')) {
+		const cleanReq = requirePhp.replace(/[^0-9.]/g, '');
+		if (cleanReq !== options.targetMin && !requirePhp.includes(options.targetMin)) {
 			needsUpdate = true;
 		}
 	} else {
@@ -180,7 +209,7 @@ function auditComposer(repoPath) {
 /**
  * Audit PHPCS configuration (phpcs.xml, phpcs.xml.dist)
  */
-function auditPhpcs(repoPath) {
+function auditPhpcs(repoPath, options) {
 	const candidates = ['phpcs.xml', 'phpcs.xml.dist', '.phpcs.xml', '.phpcs.xml.dist'];
 	let foundFile = null;
 	let content = null;
@@ -200,7 +229,7 @@ function auditPhpcs(repoPath) {
 
 	const testVersionMatch = content.match(/<config\s+name=["']testVersion["']\s+value=["']([^"']+)["']/i);
 	const testVersion = testVersionMatch ? testVersionMatch[1].trim() : null;
-	const targetTestVersion = `${TARGET_MIN_PHP}-${TARGET_MAX_PHP}`;
+	const targetTestVersion = `${options.targetMin}-${options.targetMax}`;
 	const needsUpdate = testVersion !== targetTestVersion;
 
 	return {
@@ -215,13 +244,15 @@ function auditPhpcs(repoPath) {
 /**
  * Audit Static Analysis (PHPStan / Psalm)
  */
-function auditStaticAnalysis(repoPath) {
+function auditStaticAnalysis(repoPath, options) {
 	const candidates = [
 		{ name: 'phpstan.neon', type: 'phpstan' },
 		{ name: 'phpstan.neon.dist', type: 'phpstan' },
 		{ name: 'psalm.xml', type: 'psalm' },
 		{ name: 'psalm.xml.dist', type: 'psalm' }
 	];
+
+	const targetCode = `${options.targetMin.replace('.', '')}00`;
 
 	const results = [];
 	for (const candidate of candidates) {
@@ -237,7 +268,7 @@ function auditStaticAnalysis(repoPath) {
 				file: candidate.name,
 				type: candidate.type,
 				phpVersion,
-				targetPhpVersion: '80200 (PHP 8.2)'
+				targetPhpVersion: `${targetCode} (PHP ${options.targetMin})`
 			});
 		}
 	}
@@ -251,11 +282,12 @@ function auditStaticAnalysis(repoPath) {
 /**
  * Audit GitHub Actions CI workflows
  */
-function auditWorkflows(repoPath) {
+function auditWorkflows(repoPath, options) {
 	const workflowDir = join(repoPath, '.github', 'workflows');
 	const yamlFiles = findFiles(workflowDir, /\.(yml|yaml)$/, 1);
 
 	const detectedWorkflows = [];
+	const minVal = parseFloat(options.targetMin);
 
 	for (const file of yamlFiles) {
 		const content = readText(file);
@@ -276,26 +308,26 @@ function auditWorkflows(repoPath) {
 		const singlePhpMatch = content.match(/php-version:\s*['"]?([0-9.]+)['"]?/i);
 		const singlePhpVersion = singlePhpMatch ? singlePhpMatch[1] : null;
 
-		const has82 = detectedVersions.includes('8.2') || /['"]?8\.2['"]?/.test(content);
-		const has85 = detectedVersions.includes('8.5') || /['"]?8\.5['"]?/.test(content);
-		const hasLegacy = detectedVersions.some((v) => parseFloat(v) < 8.2) || (singlePhpVersion && parseFloat(singlePhpVersion) < 8.2);
+		const hasMin = detectedVersions.includes(options.targetMin) || new RegExp(`['"]?${options.targetMin.replace('.', '\\.')}['"]?`).test(content);
+		const hasMax = detectedVersions.includes(options.targetMax) || new RegExp(`['"]?${options.targetMax.replace('.', '\\.')}['"]?`).test(content);
+		const hasLegacy = detectedVersions.some((v) => parseFloat(v) < minVal) || (singlePhpVersion && parseFloat(singlePhpVersion) < minVal);
 
 		let needsMatrixUpdate = false;
 		if (isMatrixWorkflow) {
-			needsMatrixUpdate = !has82 || !has85 || hasLegacy;
+			needsMatrixUpdate = !hasMin || !hasMax || hasLegacy;
 		} else if (singlePhpVersion) {
-			needsMatrixUpdate = parseFloat(singlePhpVersion) < 8.2;
+			needsMatrixUpdate = parseFloat(singlePhpVersion) < minVal;
 		}
 
 		if (isMatrixWorkflow || content.includes('setup-php') || content.includes('shivammathur/setup-php')) {
 			detectedWorkflows.push({
 				file: basename(file),
 				detectedVersions,
-				has82,
-				has85,
+				hasMin,
+				hasMax,
 				hasLegacy,
 				needsMatrixUpdate,
-				recommendedMatrix: TARGET_RECOMMENDED_MATRIX
+				recommendedMatrix: options.matrix
 			});
 		}
 	}
@@ -307,10 +339,12 @@ function auditWorkflows(repoPath) {
 }
 
 /**
- * Scan PHP files for potential PHP 8.2-8.5 deprecations and obsolete shims
+ * Scan PHP files for potential deprecations and obsolete shims relative to targetMin
  */
-function auditCodePatterns(repoPath) {
+function auditCodePatterns(repoPath, options) {
 	const phpFiles = findFiles(repoPath, /\.php$/, 4);
+	const minVal = parseFloat(options.targetMin);
+
 	const findings = {
 		dynamicProperties: [],
 		utf8EncodeDecode: [],
@@ -325,9 +359,8 @@ function auditCodePatterns(repoPath) {
 		const content = readText(file);
 		if (!content) continue;
 
-		// 1. Dynamic properties (classes without #[AllowDynamicProperties])
-		if (content.includes('class ') && (content.includes('->$') || content.includes('this->'))) {
-			// Check if AllowDynamicProperties attribute is used
+		// 1. Dynamic properties (classes without #[AllowDynamicProperties] in PHP >= 8.2)
+		if (minVal >= 8.2 && content.includes('class ') && (content.includes('->$') || content.includes('this->'))) {
 			if (content.match(/class\s+\w+/i) && !content.includes('#[\\AllowDynamicProperties]') && !content.includes('#[AllowDynamicProperties]')) {
 				if (content.includes('function __set') || content.includes('get_object_vars')) {
 					findings.dynamicProperties.push({
@@ -339,7 +372,7 @@ function auditCodePatterns(repoPath) {
 		}
 
 		// 2. utf8_encode / utf8_decode (Deprecated in PHP 8.2)
-		if (/\butf8_(encode|decode)\s*\(/i.test(content)) {
+		if (minVal >= 8.2 && /\butf8_(encode|decode)\s*\(/i.test(content)) {
 			findings.utf8EncodeDecode.push({
 				file: relativePath,
 				hint: 'Replace with mb_convert_encoding() or iconv()'
@@ -347,7 +380,7 @@ function auditCodePatterns(repoPath) {
 		}
 
 		// 3. ${var} string interpolation (Deprecated in PHP 8.2)
-		if (/\$\{[a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*\}/.test(content)) {
+		if (minVal >= 8.2 && /\$\{[a-zA-Z_\x7f-\xff][a-zA-Z0-9_\x7f-\xff]*\}/.test(content)) {
 			findings.deprecatedInterpolation.push({
 				file: relativePath,
 				hint: 'Replace ${var} with {$var}'
@@ -355,31 +388,44 @@ function auditCodePatterns(repoPath) {
 		}
 
 		// 4. auto_detect_line_endings (Deprecated in PHP 8.1, Notice in 8.2)
-		if (/auto_detect_line_endings/i.test(content)) {
+		if (minVal >= 8.1 && /auto_detect_line_endings/i.test(content)) {
 			findings.autoDetectLineEndings.push({
 				file: relativePath,
 				hint: 'Obsolete ini directive: auto_detect_line_endings'
 			});
 		}
 
-		// 5. Obsolete polyfills (< 8.2)
-		const polyfillRegex = /function_exists\s*\(\s*['"](str_contains|str_starts_with|str_ends_with|array_is_list|get_debug_type)['"]\s*\)/i;
-		if (polyfillRegex.test(content)) {
-			const match = content.match(polyfillRegex);
-			findings.obsoletePolyfills.push({
-				file: relativePath,
-				function: match[1],
-				hint: `Native in PHP 8.0-8.1; conditional polyfill block can be safely removed`
-			});
+		// 5. Obsolete polyfills relative to targetMin
+		// Build list of native functions available up to targetMin
+		const polyfills = [];
+		if (minVal >= 8.0) polyfills.push('str_contains', 'str_starts_with', 'str_ends_with', 'get_debug_type');
+		if (minVal >= 8.1) polyfills.push('array_is_list');
+
+		if (polyfills.length > 0) {
+			const polyfillRegex = new RegExp(`function_exists\\s*\\(\\s*['"](${polyfills.join('|')})['"]\\s*\\)`, 'i');
+			if (polyfillRegex.test(content)) {
+				const match = content.match(polyfillRegex);
+				findings.obsoletePolyfills.push({
+					file: relativePath,
+					function: match[1],
+					hint: `Native in PHP <= ${options.targetMin}; conditional polyfill block can be safely removed`
+				});
+			}
 		}
 
-		// 6. Obsolete PHP version checks (< 8.2)
-		const versionCheckRegex = /version_compare\s*\(\s*PHP_VERSION\s*,\s*['"](5\.[0-9]|7\.[0-9]|8\.0|8\.1)['"]\s*,\s*['"]<['"]\s*\)/i;
-		if (versionCheckRegex.test(content)) {
-			findings.obsoleteVersionChecks.push({
-				file: relativePath,
-				hint: 'Conditional check for < 8.2 is now dead code when floor is PHP 8.2'
-			});
+		// 6. Obsolete PHP version checks (< targetMin)
+		// Detect version_compare against versions lower than minVal
+		const versionCheckRegex = /version_compare\s*\(\s*PHP_VERSION\s*,\s*['"]([0-9.]+)['"]\s*,\s*['"]<['"]\s*\)/gi;
+		let vMatch;
+		while ((vMatch = versionCheckRegex.exec(content)) !== null) {
+			const checkedVer = parseFloat(vMatch[1]);
+			if (!isNaN(checkedVer) && checkedVer <= minVal) {
+				findings.obsoleteVersionChecks.push({
+					file: relativePath,
+					version: vMatch[1],
+					hint: `Conditional check for < ${vMatch[1]} is dead code when floor is PHP ${options.targetMin}`
+				});
+			}
 		}
 	}
 
@@ -389,45 +435,45 @@ function auditCodePatterns(repoPath) {
 /**
  * Audit a single repository directory
  */
-function auditRepository(repoPath) {
+function auditRepository(repoPath, options) {
 	const absPath = resolve(repoPath);
 	const repoName = basename(absPath);
 
-	const pluginHeader = auditPluginHeader(absPath);
-	const readmeTxt = auditReadmeTxt(absPath);
-	const composer = auditComposer(absPath);
-	const phpcs = auditPhpcs(absPath);
-	const staticAnalysis = auditStaticAnalysis(absPath);
-	const workflows = auditWorkflows(absPath);
-	const codePatterns = auditCodePatterns(absPath);
+	const pluginHeader = auditPluginHeader(absPath, options);
+	const readmeTxt = auditReadmeTxt(absPath, options);
+	const composer = auditComposer(absPath, options);
+	const phpcs = auditPhpcs(absPath, options);
+	const staticAnalysis = auditStaticAnalysis(absPath, options);
+	const workflows = auditWorkflows(absPath, options);
+	const codePatterns = auditCodePatterns(absPath, options);
 
 	// Action plan determination
 	const actionItems = [];
 
 	if (pluginHeader.found && pluginHeader.needsUpdate) {
-		actionItems.push(`Update plugin header 'Requires PHP' to ${TARGET_MIN_PHP} in ${pluginHeader.file}`);
+		actionItems.push(`Update plugin header 'Requires PHP' to ${options.targetMin} in ${pluginHeader.file}`);
 	}
 	if (readmeTxt.found && readmeTxt.needsUpdate) {
-		actionItems.push(`Update readme.txt 'Requires PHP' to ${TARGET_MIN_PHP}`);
+		actionItems.push(`Update readme.txt 'Requires PHP' to ${options.targetMin}`);
 	}
 	if (composer.found && composer.needsUpdate) {
-		actionItems.push(`Update composer.json 'require.php' to >=${TARGET_MIN_PHP}`);
+		actionItems.push(`Update composer.json 'require.php' to >=${options.targetMin}`);
 	}
 	if (phpcs.found && phpcs.needsUpdate) {
-		actionItems.push(`Update PHPCS testVersion in ${phpcs.file} to ${TARGET_MIN_PHP}-${TARGET_MAX_PHP}`);
+		actionItems.push(`Update PHPCS testVersion in ${phpcs.file} to ${options.targetMin}-${options.targetMax}`);
 	}
 	if (workflows.found) {
 		for (const wf of workflows.workflows) {
 			if (wf.needsMatrixUpdate) {
-				actionItems.push(`Update CI matrix in ${wf.file} to [8.2, 8.3, 8.4, 8.5]`);
+				actionItems.push(`Update CI matrix in ${wf.file} to [${options.matrix.join(', ')}]`);
 			}
 		}
 	}
 	if (codePatterns.obsoletePolyfills.length > 0) {
-		actionItems.push(`Prune ${codePatterns.obsoletePolyfills.length} obsolete polyfill(s) native in PHP 8.2+`);
+		actionItems.push(`Prune ${codePatterns.obsoletePolyfills.length} obsolete polyfill(s) native in PHP <= ${options.targetMin}`);
 	}
 	if (codePatterns.obsoleteVersionChecks.length > 0) {
-		actionItems.push(`Clean up ${codePatterns.obsoleteVersionChecks.length} obsolete <8.2 PHP_VERSION conditional branches`);
+		actionItems.push(`Clean up ${codePatterns.obsoleteVersionChecks.length} obsolete <${options.targetMin} PHP_VERSION conditional branches`);
 	}
 	if (codePatterns.deprecatedInterpolation.length > 0) {
 		actionItems.push(`Modernize ${codePatterns.deprecatedInterpolation.length} deprecated \${var} interpolation instances`);
@@ -440,8 +486,9 @@ function auditRepository(repoPath) {
 		repository: repoName,
 		path: absPath,
 		status: actionItems.length === 0 ? 'COMPLIANT' : 'NEEDS_UPGRADE',
-		targetFloor: TARGET_MIN_PHP,
-		targetCeiling: TARGET_MAX_PHP,
+		targetFloor: options.targetMin,
+		targetCeiling: options.targetMax,
+		targetMatrix: options.matrix,
 		components: {
 			pluginHeader,
 			readmeTxt,
@@ -459,12 +506,47 @@ function auditRepository(repoPath) {
  * Main CLI entry point
  */
 function main() {
-	const args = process.argv.slice(2);
-	const isJson = args.includes('--json');
-	const isBatch = args.includes('--batch');
+	const rawArgs = process.argv.slice(2);
+	const isJson = rawArgs.includes('--json');
+	const isBatch = rawArgs.some((arg) => arg === '--batch' || arg.startsWith('--batch='));
 
-	const targetIndex = args.findIndex((arg) => !arg.startsWith('--'));
-	const targetPath = targetIndex !== -1 ? args[targetIndex] : process.cwd();
+	// Parse --min and --max
+	let targetMin = DEFAULT_MIN_PHP;
+	let targetMax = DEFAULT_MAX_PHP;
+
+	for (let i = 0; i < rawArgs.length; i++) {
+		const arg = rawArgs[i];
+		if (arg.startsWith('--min=')) {
+			targetMin = arg.split('=')[1].trim();
+		} else if (arg === '--min' && rawArgs[i + 1]) {
+			targetMin = rawArgs[i + 1].trim();
+		} else if (arg.startsWith('--max=')) {
+			targetMax = arg.split('=')[1].trim();
+		} else if (arg === '--max' && rawArgs[i + 1]) {
+			targetMax = rawArgs[i + 1].trim();
+		}
+	}
+
+	const matrix = generateVersionMatrix(targetMin, targetMax);
+	const options = {
+		targetMin,
+		targetMax,
+		matrix
+	};
+
+	// Determine target path
+	let targetPath = process.cwd();
+	const batchArg = rawArgs.find((arg) => arg.startsWith('--batch='));
+	if (batchArg) {
+		targetPath = batchArg.split('=')[1];
+	} else {
+		const nonFlagIndex = rawArgs.findIndex(
+			(arg, idx) => !arg.startsWith('--') && (idx === 0 || (!rawArgs[idx - 1].startsWith('--min') && !rawArgs[idx - 1].startsWith('--max')))
+		);
+		if (nonFlagIndex !== -1) {
+			targetPath = rawArgs[nonFlagIndex];
+		}
+	}
 
 	if (isBatch) {
 		const baseDir = resolve(targetPath);
@@ -479,14 +561,15 @@ function main() {
 			.map((e) => join(baseDir, e.name))
 			.filter((dir) => existsSync(join(dir, 'composer.json')) || findFiles(dir, /\.php$/, 1).length > 0);
 
-		const batchResults = repoDirs.map((dir) => auditRepository(dir));
+		const batchResults = repoDirs.map((dir) => auditRepository(dir, options));
 
 		if (isJson) {
 			console.log(JSON.stringify(batchResults, null, 2));
 		} else {
 			console.log(`\n======================================================`);
-			console.log(`📊 PHP 8.2-8.5 UPGRADE AUDIT: BATCH SUITE REPORT`);
+			console.log(`📊 PHP ${targetMin}-${targetMax} UPGRADE AUDIT: BATCH SUITE REPORT`);
 			console.log(`======================================================\n`);
+			console.log(`Target Range: PHP ${targetMin} -> ${targetMax} (Matrix: [${matrix.join(', ')}])`);
 			console.log(`Repositories Audited: ${batchResults.length}\n`);
 
 			for (const res of batchResults) {
@@ -503,16 +586,16 @@ function main() {
 		return;
 	}
 
-	const result = auditRepository(targetPath);
+	const result = auditRepository(targetPath, options);
 
 	if (isJson) {
 		console.log(JSON.stringify(result, null, 2));
 	} else {
 		console.log(`\n======================================================`);
-		console.log(`🔍 PHP 8.2-8.5 AUDIT REPORT: ${result.repository}`);
+		console.log(`🔍 PHP ${result.targetFloor}-${result.targetCeiling} AUDIT REPORT: ${result.repository}`);
 		console.log(`======================================================\n`);
 		console.log(`Status: ${result.status === 'COMPLIANT' ? '✅ Compliant' : '⚠️ Upgrade Required'}`);
-		console.log(`Target Range: PHP ${result.targetFloor} -> ${result.targetCeiling}\n`);
+		console.log(`Target Range: PHP ${result.targetFloor} -> ${result.targetCeiling} (Matrix: [${result.targetMatrix.join(', ')}])\n`);
 
 		console.log(`--- [1. Metadata & Config Status] ---`);
 		console.log(`• Plugin Header:  ${result.components.pluginHeader.found ? `${result.components.pluginHeader.requiresPhp || 'Not specified'} (${result.components.pluginHeader.file})` : 'Not found'}`);
@@ -524,13 +607,13 @@ function main() {
 		console.log(`--- [2. Code Patterns & Compatibility] ---`);
 		console.log(`• Deprecated Interpolation (\${var}): ${result.codeFindings.deprecatedInterpolation.length}`);
 		console.log(`• Deprecated utf8_encode/decode:      ${result.codeFindings.utf8EncodeDecode.length}`);
-		console.log(`• Obsolete Polyfills (<8.2):          ${result.codeFindings.obsoletePolyfills.length}`);
-		console.log(`• Obsolete Version Checks (<8.2):     ${result.codeFindings.obsoleteVersionChecks.length}`);
+		console.log(`• Obsolete Polyfills (<= ${result.targetFloor}):       ${result.codeFindings.obsoletePolyfills.length}`);
+		console.log(`• Obsolete Version Checks (< ${result.targetFloor}):  ${result.codeFindings.obsoleteVersionChecks.length}`);
 		console.log(`• Dynamic Property Risks:             ${result.codeFindings.dynamicProperties.length}\n`);
 
 		console.log(`--- [3. Action Items (${result.actionItems.length})] ---`);
 		if (result.actionItems.length === 0) {
-			console.log(`✅ Fully configured for PHP ${TARGET_MIN_PHP}-${TARGET_MAX_PHP}! No manual actions needed.`);
+			console.log(`✅ Fully configured for PHP ${result.targetFloor}-${result.targetCeiling}! No manual actions needed.`);
 		} else {
 			for (const action of result.actionItems) {
 				console.log(`👉 ${action}`);
