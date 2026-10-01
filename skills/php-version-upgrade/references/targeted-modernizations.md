@@ -1,6 +1,6 @@
 # Targeted Value-Add Modernization Guardrails
 
-A core tenet of the Fueled and 10up open-source engineering philosophy is:
+A core tenet of modern open-source software engineering is:
 > **"Avoid unnecessary refactoring solely to adopt newer PHP syntax. Focus on compatibility, test coverage, and stability."**
 
 This reference provides strict guardrails distinguishing high-value modernizations from cosmetic churn.
@@ -11,8 +11,8 @@ This reference provides strict guardrails distinguishing high-value modernizatio
 
 | Tier | Category | Policy | Examples |
 |---|---|---|---|
-| **Tier 1** | **Mandatory Compatibility & Deprecations** | **Required** | Adding `#[AllowDynamicProperties]` or declaring class properties; replacing `utf8_encode()`; fixing `${var}` strings; updating CI matrices. |
-| **Tier 2** | **Targeted High-Value Modernizations** | **Selective & Surgical** | Marking immutable DTO properties as `readonly`; pruning dead `<8.2` version polyfills; modernizing native return types on strictly sealed internal classes. |
+| **Tier 1** | **Mandatory Compatibility & Deprecations** | **Required** | Adding `#[\AllowDynamicProperties]` or declaring class properties; replacing `utf8_encode()`; fixing `${var}` strings; updating CI matrices. |
+| **Tier 2** | **Targeted High-Value Modernizations** | **Selective & Surgical** | Marking immutable DTO properties as `readonly`; pruning dead `<8.0` / `<8.2` version polyfills; modernizing native return types on strictly sealed internal classes. |
 | **Tier 3** | **Cosmetic Syntax Churn** | **FORBIDDEN** | Converting legacy switch statements to match expressions without need; rewriting standard constructors to constructor promotion across stable classes; bulk typing parameters on public API hooks. |
 
 ---
@@ -71,7 +71,7 @@ final class Webhook_Payload {
 ### ✅ 2. Eliminating Deprecated Dynamic Properties
 Either declare the property explicitly:
 ```php
-class Safe_Redirect_Admin {
+class Example_Plugin_Admin {
     /**
      * Admin notice message.
      *

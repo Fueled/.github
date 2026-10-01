@@ -2,7 +2,7 @@
 name: php-version-upgrade
 description: Audit and update WordPress plugin or theme repositories to raise minimum PHP support floor and expand tested ceiling with configurable version boundaries (default: PHP 8.2 through 8.5).
 license: MIT
-compatibility: PHP 8.1-8.5, WordPress 6.4+, Composer, PHPUnit, PHPCS, PHPStan
+compatibility: PHP 8.0-8.5, WordPress 6.4+, Composer, PHPUnit, PHPCS, PHPStan
 globs:
   - "*.php"
   - composer.json
@@ -13,23 +13,23 @@ globs:
   - phpstan.neon*
   - .github/workflows/*.yml
 metadata:
-  author: Fueled & 10up
-  version: "1.1.0"
+  author: Fueled
+  version: "1.0.0"
 ---
 
 # PHP Version Support Upgrade Skill
 
 This skill guides you through auditing and updating a WordPress plugin or theme repository to raise its minimum supported runtime floor (default: **PHP 8.2**) and expand tested compatibility through a targeted upper ceiling (default: **PHP 8.5**).
 
-Following the direction outlined in [WooCommerce's PHP version support update](https://developer.woocommerce.com/2026/09/08/from-php-7-4-to-8-1/) and maintainer guidance by Fueled and 10up engineering leads, this skill is fully **parameterized and generic**, allowing developers and AI agents to target any minimum and maximum version combination (e.g., bumping to 8.3 or maintaining an 8.1 baseline) while strictly avoiding unnecessary syntax refactoring.
+Following modern WordPress ecosystem standards, including [WooCommerce's PHP version support update](https://developer.woocommerce.com/2026/09/08/from-php-7-4-to-8-1/), this skill is fully **parameterized and generic**, allowing developers and AI agents to target any minimum and maximum version combination (e.g., bumping to 8.0, 8.1, 8.2, 8.3) while strictly avoiding unnecessary syntax refactoring.
 
 ---
 
 ## 🎯 Interactive Invocation & Version Configuration
 
 When invoking this skill, determine the target version boundaries:
-- **Target Minimum PHP Version Floor (`targetMin`):** `8.2` (Default for current Fueled/10up initiative)
-- **Target Maximum Tested PHP Version Ceiling (`targetMax`):** `8.5` (Default for current Fueled/10up initiative)
+- **Target Minimum PHP Version Floor (`targetMin`):** `8.2`
+- **Target Maximum Tested PHP Version Ceiling (`targetMax`):** `8.5`
 
 ### AI Agent Invocation Protocol:
 If not explicitly provided in the prompt, the agent may prompt the user:
@@ -41,7 +41,7 @@ If executing in autonomous or pipeline mode without interactive input, fall back
 
 ## When to Use
 
-- Updating a Fueled or 10up open-source repository to modernize PHP requirements.
+- Modernizing PHP requirements for any WordPress plugin, theme, or library codebase.
 - Elevating a plugin or theme's runtime floor (e.g., from PHP 7.x/8.0 to PHP 8.2, or 8.2 to 8.3).
 - Expanding GitHub Actions CI pipelines to test across the modernized matrix.
 - Remedying PHP deprecation notices (such as dynamic properties, `${var}` string interpolation, or `utf8_encode()`).
@@ -68,8 +68,8 @@ Execute the bundled audit script against the repository. The script supports dyn
 # Default boundaries (PHP 8.2 -> 8.5)
 node scripts/audit_php_versions.mjs [path-to-repo]
 
-# Custom boundaries (e.g. PHP 8.3 -> 8.5, or PHP 8.1 -> 8.5)
-node scripts/audit_php_versions.mjs [path-to-repo] --min=8.3 --max=8.5
+# Custom boundaries (e.g. PHP 8.3 -> 8.5, or PHP 8.0 -> 8.5)
+node scripts/audit_php_versions.mjs [path-to-repo] --min=8.0 --max=8.5
 
 # Batch auditing across multiple repositories in a parent directory
 node scripts/audit_php_versions.mjs --batch=[path-to-parent-dir] --min=8.2 --max=8.5
@@ -122,7 +122,7 @@ Consult [Detection & Tooling Matrix](references/detection-and-tooling-matrix.md)
    ```
 
 5. **Static Analysis (`phpstan.neon`):**
-   Set `phpVersion` parameter to `<targetMinCode>` (e.g., `80200` for 8.2, `80300` for 8.3):
+   Set `phpVersion` parameter to `<targetMinCode>` (e.g., `80200` for 8.2, `80000` for 8.0):
    ```neon
    parameters:
        phpVersion: 80200
@@ -149,19 +149,21 @@ strategy:
 
 ### Step 4: Remediate Deprecations & Incompatibilities
 
-Consult [PHP 8.2–8.5 Deprecations Reference](references/php82-85-deprecations.md) for full remediation examples.
+Consult [PHP 8.0–8.5 Deprecations Reference](references/php80-85-deprecations.md) for full remediation examples.
 
-1. **Dynamic Properties (PHP 8.2+):**
+1. **Passing Null to Non-Nullable Internal Functions (PHP 8.1+):**
+   - Ensure scalar arguments passed to built-in functions (e.g., `strlen()`, `trim()`, `str_replace()`) are cast or defaulted (`(string) $val`).
+2. **Dynamic Properties (PHP 8.2+):**
    - Preferred: Declare class properties explicitly with appropriate types and default values.
    - Alternative: Apply the `#[\AllowDynamicProperties]` attribute to legacy container classes.
-2. **String Interpolation (PHP 8.2+):**
+3. **String Interpolation (PHP 8.2+):**
    - Replace `${var}` with `{$var}` or `$var`.
-3. **Deprecated UTF-8 Encoding Functions (PHP 8.2+):**
+4. **Deprecated UTF-8 Encoding Functions (PHP 8.2+):**
    - Replace `utf8_encode( $str )` with `mb_convert_encoding( $str, 'UTF-8', 'ISO-8859-1' )`.
    - Replace `utf8_decode( $str )` with `mb_convert_encoding( $str, 'ISO-8859-1', 'UTF-8' )`.
-4. **Obsolete INI Directives (PHP 8.1+):**
+5. **Obsolete INI Directives (PHP 8.1+):**
    - Remove `ini_set( 'auto_detect_line_endings', ... )`.
-5. **Implicitly Nullable Parameters (PHP 8.4+):**
+6. **Implicitly Nullable Parameters (PHP 8.4+):**
    - Change `function example( string $param = null )` to `function example( ?string $param = null )`.
 
 ---
@@ -228,6 +230,6 @@ Consult [Targeted Modernizations Guardrails](references/targeted-modernizations.
 ## Detailed References
 
 - [Detection and Tooling Configuration Matrix](references/detection-and-tooling-matrix.md)
-- [PHP 8.2–8.5 Deprecations and Incompatibilities Reference](references/php82-85-deprecations.md)
+- [PHP 8.0–8.5 Deprecations and Incompatibilities Reference](references/php80-85-deprecations.md)
 - [Legacy Shims and Dead Code Catalog](references/legacy-shims-catalog.md)
 - [Targeted Value-Add Modernization Guardrails](references/targeted-modernizations.md)

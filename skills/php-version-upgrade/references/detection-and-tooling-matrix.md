@@ -1,33 +1,37 @@
 # Detection and Tooling Configuration Matrix
 
-This reference specifies the deterministic configuration, metadata, and continuous integration settings required when upgrading a WordPress plugin or theme repository to support **PHP 8.2 through PHP 8.5**.
+This reference specifies the deterministic configuration, metadata, and continuous integration settings required when upgrading a WordPress plugin or theme repository to support **PHP 8.0 through PHP 8.5** (or any custom target range specified via `--min` and `--max`).
 
 ---
 
 ## 1. Version Floor and Ceiling Standard
 
+Using **PHP 8.0** as the flexible baseline floor example (adjustable via `--min`):
+
 | Property | Value | Rationale |
 |---|---|---|
-| **Minimum Floor** | `8.2` | Minimum PHP version receiving active/security fixes; widely adopted across modern hosting and enterprise infrastructure. |
+| **Minimum Floor** | `8.0` | Flexible baseline floor; lowest modern PHP 8.x series, providing a modern foundation. |
 | **Maximum Ceiling** | `8.5` | Next-generation PHP target; ensures proactive compatibility and zero surprise deprecations upon general availability. |
-| **Test Matrix** | `['8.2', '8.3', '8.4', '8.5']` | Comprehensive multi-version matrix verifying LTS stability and forward compatibility. |
+| **Test Matrix** | `['8.0', '8.1', '8.2', '8.3', '8.4', '8.5']` | Comprehensive multi-version matrix verifying LTS stability and forward compatibility. |
+
+*Note: When targeting a higher floor (such as PHP 8.2 or 8.3), parameterize accordingly (e.g., minimum floor `8.2` and matrix `['8.2', '8.3', '8.4', '8.5']`).*
 
 ---
 
 ## 2. Plugin & Theme Metadata Headers
 
 ### A. Main Plugin Entry Point (`*.php`)
-Locate the root plugin header block in the entry PHP file (e.g. `plugin-name.php`). Ensure `Requires PHP` is present and set to `8.2`:
+Locate the root plugin header block in the entry PHP file (e.g. `plugin-name.php`). Ensure `Requires PHP` is present and set to `<targetMin>` (e.g. `8.0`):
 
 ```php
 /**
- * Plugin Name:       Example 10up Plugin
- * Plugin URI:        https://github.com/10up/example-plugin
- * Description:       Enterprise-grade WordPress solution.
+ * Plugin Name:       Example Plugin
+ * Plugin URI:        https://example.com/example-plugin
+ * Description:       Modern WordPress solution.
  * Version:           1.4.0
  * Requires at least: 6.4
- * Requires PHP:      8.2
- * Author:            10up
+ * Requires PHP:      8.0
+ * Author:            Plugin Author
  * License:           GPL-2.0-or-later
  */
 ```
@@ -36,12 +40,12 @@ Locate the root plugin header block in the entry PHP file (e.g. `plugin-name.php
 In the header section of `readme.txt`, synchronize the `Requires PHP` directive:
 
 ```text
-=== Example 10up Plugin ===
-Contributors: 10up
-Tags: enterprise, blocks, workflow
+=== Example Plugin ===
+Contributors: exampleauthor
+Tags: modern, blocks, workflow
 Requires at least: 6.4
 Tested up to: 6.7
-Requires PHP: 8.2
+Requires PHP: 8.0
 Stable tag: 1.4.0
 License: GPLv2 or later
 ```
@@ -52,10 +56,10 @@ If upgrading a theme or child theme, update the stylesheet header:
 ```css
 /*
 Theme Name: Example Theme
-Theme URI: https://github.com/Fueled/example-theme
-Author: Fueled
+Theme URI: https://example.com/example-theme
+Author: Theme Author
 Requires at least: 6.4
-Requires PHP: 8.2
+Requires PHP: 8.0
 Version: 1.0.0
 */
 ```
@@ -65,16 +69,16 @@ Version: 1.0.0
 ## 3. Dependency Management (`composer.json`)
 
 ### A. Core PHP Requirement
-Update `require.php` to enforce PHP 8.2 as the minimum runtime requirement:
+Update `require.php` to enforce `<targetMin>` as the minimum runtime requirement (e.g. `8.0`):
 
 ```json
 {
   "require": {
-    "php": ">=8.2"
+    "php": ">=8.0"
   }
 }
 ```
-*Note: If the repository uses caret syntax for minor version locking, use `"php": "^8.2 || ^8.3 || ^8.4 || ^8.5"`.*
+*Note: If the repository uses caret syntax for minor version locking, use `"php": "^8.0 || ^8.1 || ^8.2 || ^8.3 || ^8.4 || ^8.5"`.*
 
 ### B. Platform Emulation (Optional)
 If `config.platform.php` is specified, align it to the minimum supported floor to prevent installing packages requiring higher PHP features during CI dependency resolution:
@@ -83,7 +87,7 @@ If `config.platform.php` is specified, align it to the minimum supported floor t
 {
   "config": {
     "platform": {
-      "php": "8.2.0"
+      "php": "8.0.0"
     }
   }
 }
@@ -94,15 +98,15 @@ If `config.platform.php` is specified, align it to the minimum supported floor t
 ## 4. Code Standards & Linter Configurations
 
 ### A. PHP CodeSniffer (`phpcs.xml` or `phpcs.xml.dist`)
-Ensure `PHPCompatibility` / `PHPCompatibilityWP` is configured to audit the exact `8.2-8.5` version range:
+Ensure `PHPCompatibility` / `PHPCompatibilityWP` is configured to audit the exact `<targetMin>-<targetMax>` version range (e.g. `8.0-8.5`):
 
 ```xml
 <?xml version="1.0"?>
 <ruleset name="WordPress Plugin Coding Standards">
     <description>Coding standards for Example Plugin.</description>
 
-    <!-- Enforce PHP 8.2-8.5 compatibility checks -->
-    <config name="testVersion" value="8.2-8.5"/>
+    <!-- Enforce PHP 8.0-8.5 compatibility checks -->
+    <config name="testVersion" value="8.0-8.5"/>
 
     <!-- Include PHPCompatibility rules -->
     <rule ref="PHPCompatibilityWP"/>
@@ -113,7 +117,7 @@ Ensure `PHPCompatibility` / `PHPCompatibilityWP` is configured to audit the exac
 When running `phpcs` via CLI or npm scripts, update any inline `--runtime-set` arguments:
 
 ```bash
-vendor/bin/phpcs -p -s -v -n . --standard=phpcs.xml --runtime-set testVersion 8.2-8.5
+vendor/bin/phpcs -p -s -v -n . --standard=phpcs.xml --runtime-set testVersion 8.0-8.5
 ```
 
 ---
@@ -121,12 +125,12 @@ vendor/bin/phpcs -p -s -v -n . --standard=phpcs.xml --runtime-set testVersion 8.
 ## 5. Static Analysis Configuration
 
 ### A. PHPStan (`phpstan.neon` or `phpstan.neon.dist`)
-Set the target analysis `phpVersion` parameter to `80200` (representing PHP 8.2.0):
+Set the target analysis `phpVersion` parameter to `<targetMinCode>` (e.g. `80000` for PHP 8.0, `80200` for PHP 8.2):
 
 ```neon
 parameters:
     level: 8
-    phpVersion: 80200
+    phpVersion: 80000
     paths:
         - src/
         - includes/
@@ -138,7 +142,7 @@ Set `phpVersion` attribute on the root `<psalm>` element:
 ```xml
 <psalm
     errorLevel="3"
-    phpVersion="8.2"
+    phpVersion="8.0"
     resolveFromConfigFile="true"
 >
 ```
@@ -148,7 +152,7 @@ Set `phpVersion` attribute on the root `<psalm>` element:
 ## 6. GitHub Actions CI/CD Workflow Matrices
 
 ### A. Standard PHP Testing Matrix
-Update `.github/workflows/test.yml` (or `phpunit.yml` / `lint.yml`) to include PHP 8.2 through 8.5:
+Update `.github/workflows/test.yml` (or `phpunit.yml` / `lint.yml`) to include the configured PHP matrix (e.g. PHP 8.0 through 8.5):
 
 ```yaml
 jobs:
@@ -157,7 +161,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.2', '8.3', '8.4', '8.5']
+        php: ['8.0', '8.1', '8.2', '8.3', '8.4', '8.5']
         wordpress: ['latest']
         include:
           - php: '8.5'
